@@ -38,21 +38,36 @@ class IBApp(EWrapper, EClient):
         # dicts for alerts
         self.tick_price_alerts = {}
         self.historical_data_alerts = {}
+        # req_id for registering
+        self.req_id = 0
+
+    def next_req_id(self):
+        self.req_id += 1
+        return self.req_id
 
     def tickPrice(self, reqId: TickerId, tickType: TickType, price: float, attrib: TickAttrib):
         logging.info('%s tickType:%s Price: %s', reqId, tickType, price)
+        # TODO: here check for price and rules and create an alert task if needed
 
     def historicalData(self, reqId: int, bar: BarData):
         logging.info('Time: %s Close: %s', bar.date, bar.close)
+        # TODO: here check for price and rules and create an alert task if needed
 
     def register_tick_price_alert(self, task_data: dict):
-        print(task_data)
+        contract = self.create_stock_contract(task_data['symbol'])
+        # Request Market Data for contract
+        self.reqMktData(self.next_req_id(), contract, '', False, False, [])
+
 
     def register_historical_data_alert(self, task_data: dict):
-        print(task_data)
+        contract = self.create_stock_contract(task_data['symbol'])
+        # Request Market Data for contract
+        # TODO: add other params
+        self.reqHistoricalData(self.next_req_id(),
+                               contract, '', '2 D', '1 hour', 'BID', 0, 2, False, [])
 
-    def create_stock_contract(self, symbol: str, secType: str = 'STK',
-                              exchange: str = 'SMART', currency: str = 'USD'):
+    def create_stock_contract(self, symbol: str, secType: str = 'CASH',
+                              exchange: str = 'IDEALPRO', currency: str = 'USD'):
         """
         Custom method to create contract
         """
@@ -89,34 +104,23 @@ def main():
 
     app = IBApp(args.ibroker_host, args.ibroker_port, client_id=1, redis_queue=redis_queue)
 
-    time.sleep(CONNECT_SERVER_SLEEP_TIME) #  Sleep interval to allow time for connection to server
-
-    # EUR\USD contract
-    eurusd_contract = Contract()
-    eurusd_contract.symbol = 'EUR'
-    eurusd_contract.secType = 'CASH'
-    eurusd_contract.exchange = 'IDEALPRO'
-    eurusd_contract.currency = 'USD'
-
-    # Request Market Data for EUR\USD
-    app.reqMktData(1, eurusd_contract, '', False, False, [])
-
-    # Request historical candles
-    app.reqHistoricalData(1, eurusd_contract, '', '2 D', '1 hour', 'BID', 0, 2, False, [])
+    time.sleep(CONNECT_SERVER_SLEEP_TIME) # Sleep interval to allow time for connection to server
 
     try:
         while True:
             try:
 
                 # get a new tasks for tick price
-                new_tasks_tick_price = redis_connection.get('new_task_tick_price')
+                new_tasks_tick_price = redis_connection.lrange('new_tasks_tick_price', 0, -1)
+                redis_connection.delete('new_tasks_tick_price')
                 if new_tasks_tick_price:
                     for task in new_tasks_tick_price:
                         task = json.loads(task)
                         app.register_tick_price_alert(task)
 
                 # get a new tasks for history data
-                new_tasks_history_data = redis_connection.get('new_task_historical_data')
+                new_tasks_history_data = redis_connection.lrange('new_tasks_historical_data', 0, -1)
+                redis_connection.delete('new_tasks_historical_data')
                 if new_tasks_history_data:
                     for task in new_tasks_history_data:
                         task = json.loads(task)
