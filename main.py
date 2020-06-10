@@ -16,7 +16,7 @@ from redis import Redis
 
 
 CONNECT_SERVER_SLEEP_TIME = 1
-REDIS_GET_TASKS_DELAY = 0.1
+REDIS_GET_TASKS_DELAY = 0.2
 
 
 class IBApp(EWrapper, EClient):
@@ -46,10 +46,10 @@ class IBApp(EWrapper, EClient):
         logging.info('Time: %s Close: %s', bar.date, bar.close)
 
     def register_tick_price_alert(self, task_data: dict):
-        pass
+        print(task_data)
 
     def register_historical_data_alert(self, task_data: dict):
-        pass
+        print(task_data)
 
     def create_stock_contract(self, symbol: str, secType: str = 'STK',
                               exchange: str = 'SMART', currency: str = 'USD'):
@@ -73,12 +73,14 @@ def main():
                                dest="ibroker_host", default="127.0.0.1",
                                help="The host of IB app to use")
     cmdLineParser.add_argument("-ip", "--ibroker_port", action="store", type=int,
-                               dest="ibroker_port", default=7497, help="The TCP port for IB to use")
+                               dest="ibroker_port", default=7497,
+                               help="The TCP port for IB to use")
     cmdLineParser.add_argument("-rh", "--redis_host", action="store", type=str,
                                dest="redis_host", default="127.0.0.1",
                                help="The host of Redis app to use")
     cmdLineParser.add_argument("-rp", "--redis_port", action="store", type=int,
-                               dest="redis_port", default=6379, help="The TCP port for redis to use")
+                               dest="redis_port", default=6379,
+                               help="The TCP port for redis to use")
     args = cmdLineParser.parse_args()
 
     # create a redis connection and queue
@@ -102,23 +104,33 @@ def main():
     # Request historical candles
     app.reqHistoricalData(1, eurusd_contract, '', '2 D', '1 hour', 'BID', 0, 2, False, [])
 
-    while True:
+    try:
+        while True:
+            try:
 
-        # get a new tasks for tick price
-        new_tasks_tick_price = redis_connection.get('new_task_tick_price')
-        if new_tasks_tick_price:
-            for task in new_tasks_tick_price:
-                task = json.loads(task)
-                app.register_tick_price_alert(task)
+                # get a new tasks for tick price
+                new_tasks_tick_price = redis_connection.get('new_task_tick_price')
+                if new_tasks_tick_price:
+                    for task in new_tasks_tick_price:
+                        task = json.loads(task)
+                        app.register_tick_price_alert(task)
 
-        # get a new tasks for history data
-        new_tasks_history_data = redis_connection.get('new_task_historical_data')
-        if new_tasks_history_data:
-            for task in new_tasks_history_data:
-                task = json.loads(task)
-                app.register_historical_data_alert(task)
-        # sleep for new task
-        time.sleep(REDIS_GET_TASKS_DELAY)
+                # get a new tasks for history data
+                new_tasks_history_data = redis_connection.get('new_task_historical_data')
+                if new_tasks_history_data:
+                    for task in new_tasks_history_data:
+                        task = json.loads(task)
+                        app.register_historical_data_alert(task)
+
+                # sleep for new task
+                time.sleep(REDIS_GET_TASKS_DELAY)
+
+            except TypeError:
+                logging.error('Wrong data from redis')
+                continue
+    finally:
+        redis_connection.close()
+        app.disconnect()
 
 
 if __name__ == "__main__":
