@@ -1,11 +1,22 @@
+import json
 import logging
 import time
 from argparse import ArgumentParser
 from datetime import datetime
+from threading import Thread
 
 from ibapi.client import EClient
+from ibapi.common import BarData, TickAttrib, TickerId
 from ibapi.contract import Contract
+from ibapi.ticktype import TickType
 from ibapi.wrapper import EWrapper
+
+from rq import Queue
+from redis import Redis
+
+
+CONNECT_SERVER_SLEEP_TIME = 1
+REDIS_GET_TASKS_DELAY = 0.1
 
 
 class IBApp(EWrapper, EClient):
@@ -13,76 +24,96 @@ class IBApp(EWrapper, EClient):
     Mixin of Client (message sender and message loop holder)
     and Wrapper (set of callbacks)
     """
-    def __init__(self):
+    def __init__(self, host: str, port: int, client_id: int, redis_queue: Queue):
         EWrapper.__init__(self)
         EClient.__init__(self, wrapper=self)
-        self.started = False
-        self.nKeybInt = 0
 
-    def keyboardInterrupt(self):
-        """Callback - User pressed Ctrl-C"""
-        self.nKeybInt += 1
-        if self.nKeybInt == 1:
-            msg = "Manual interruption!"
-            logging.warning(msg)
-            self._onStop()
-        else:
-            msg = "Forced Manual interruption!"
-            logging.error(msg)
+        self.connect(host=host, port=port, clientId=client_id)
+        app_thread = Thread(target=self.run, daemon=True)
+        app_thread.start()
+        setattr(self, "_thread", app_thread)
 
-    def _onStart(self):
-        if self.started:
-            return
-        self.started = True
-        self.onStart()
+        self.redis_queue = redis_queue
 
-    def _onStop(self):
-        if not self.started:
-            return
-        self.onStop()
-        self.started = False
+        # dicts for alerts
+        self.tick_price_alerts = {}
+        self.historical_data_alerts = {}
 
-    def onStart(self):
-        logging.info('Main logic started')
+    def tickPrice(self, reqId: TickerId, tickType: TickType, price: float, attrib: TickAttrib):
+        logging.info('%s tickType:%s Price: %s', reqId, tickType, price)
 
-    def onStop(self):
-        logging.info('Main logic stopped')
+    def historicalData(self, reqId: int, bar: BarData):
+        logging.info('Time: %s Close: %s', bar.date, bar.close)
 
-    def tickPrice(self, reqId, tickType, price, attrib):
-        if tickType == 2 and reqId == 1:
-            print('The current ask price is: ', price)
+    def register_tick_price_alert(self, task_data: dict):
+        pass
+
+    def register_historical_data_alert(self, task_data: dict):
+        pass
+
+    def create_stock_contract(self, symbol: str, secType='STK', exchange='SMART', currency='USD'):
+        """
+        Custom method to create contract
+        """
+        contract = Contract()
+        contract.symbol = symbol
+        contract.secType = secType
+        contract.exchange = exchange
+        contract.currency = currency
+        return contract
 
 
 def main():
-    logging.debug("Starting time is %s .", datetime.now())
-    logging.getLogger().setLevel(logging.WARNING)
+    logging.getLogger().setLevel(logging.INFO)
+    logging.info("Starting time is %s .", datetime.now())
 
     cmdLineParser = ArgumentParser()
-    cmdLineParser.add_argument("-H", "--host", action="store", type=str,
-                               dest="host", default="127.0.0.1", help="The host of IB app to use")
-    cmdLineParser.add_argument("-p", "--port", action="store", type=int,
-                               dest="port", default=7497, help="The TCP port to use")
-    cmdLineParser.add_argument("-C", "--global-cancel", action="store_true",
-                               dest="global_cancel", default=False,
-                               help="whether to trigger a globalCancel req")
+    cmdLineParser.add_argument("-ih", "--ibroker_host", action="store", type=str,
+                               dest="ibroker_host", default="127.0.0.1",
+                               help="The host of IB app to use")
+    cmdLineParser.add_argument("-ip", "--ibroker_port", action="store", type=int,
+                               dest="port", default=7497, help="The TCP port for IB to use")
+    cmdLineParser.add_argument("-rh", "--redis_host", action="store", type=str,
+                               dest="ibroker_host", default="127.0.0.1",
+                               help="The host of Redis app to use")
+    cmdLineParser.add_argument("-rp", "--redis_port", action="store", type=int,
+                               dest="port", default=6379, help="The TCP port for redis to use")
     args = cmdLineParser.parse_args()
-    app = IBApp()
-    app.connect(args.host, args.port, clientId=1)
 
-    time.sleep(1) #Sleep interval to allow time for connection to server
+    # create a redis connection and queue
+    redis_connection = Redis(host=args.redis_host, port=args.redis_port)
+    redis_queue = Queue(connection=redis_connection)
 
-    #Create contract object
-    apple_contract = Contract()
-    apple_contract.symbol = 'AAPL'
-    apple_contract.secType = 'STK'
-    apple_contract.exchange = 'SMART'
-    apple_contract.currency = 'USD'
+    app = IBApp(args.host, args.port, client_id=1, redis_queue=redis_queue)
 
-    #Request Market Data
-    app.reqMktData(1, apple_contract, '', False, False, [])
+    time.sleep(CONNECT_SERVER_SLEEP_TIME) #  Sleep interval to allow time for connection to server
 
-    time.sleep(10) #Sleep interval to allow time for incoming price data
-    app.disconnect()
+    while True:
+        # get a new tasks for tick price
+        new_tasks_tick_price = redis_connection.get('new_task_tick_price')
+        if new_tasks_tick_price:
+            for task in new_tasks_tick_price:
+                task = json.loads(task)
+                app.register_tick_price_alert(task)
+        # get a new tasks for history data
+        new_tasks_tick_price = redis_connection.get('new_task_historical_data')
+        if new_tasks_tick_price:
+            for task in new_tasks_tick_price:
+                task = json.loads(task)
+                app.register_tick_price_alert(task)
+        # sleep for new task
+        time.sleep(REDIS_GET_TASKS_DELAY)
+
+    # # EUR\USD contract
+    # eurusd_contract = Contract()
+    # eurusd_contract.symbol = 'EUR'
+    # eurusd_contract.secType = 'CASH'
+    # eurusd_contract.exchange = 'IDEALPRO'
+    # eurusd_contract.currency = 'USD'
+
+    # # Request Market Data for EUR\USD
+    # app.reqMktData(1, eurusd_contract, '', False, False, [])
+
 
 if __name__ == "__main__":
     main()
