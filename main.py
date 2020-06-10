@@ -3,6 +3,7 @@ import logging
 import time
 from argparse import ArgumentParser
 from datetime import datetime
+from enum import Enum
 from threading import Thread
 
 from ibapi.client import EClient
@@ -17,6 +18,33 @@ from redis import Redis
 
 CONNECT_SERVER_SLEEP_TIME = 1
 REDIS_GET_TASKS_DELAY = 0.2
+
+
+class AlertRule(Enum):
+    GREAT = 1
+    LESS = 2
+
+
+class AlertTask(object):
+    """
+    Class for alerts objects
+    """
+    def __init__(self, req_id: int, alert_rule: AlertRule, price: float):
+        self.req_id = req_id
+        self.alert_rule = alert_rule
+        self.price = price
+
+    def is_alert_triggered(self, price: float):
+        if self.alert_rule == AlertRule.GREAT:
+            if price > self.price:
+                return True
+            else:
+                return False
+        else:
+            if price < self.price:
+                return True
+            else:
+                return False
 
 
 class IBApp(EWrapper, EClient):
@@ -35,9 +63,9 @@ class IBApp(EWrapper, EClient):
 
         self.redis_queue = redis_queue
 
-        # dicts for alerts
-        self.tick_price_alerts = {}
-        self.historical_data_alerts = {}
+        # alerts list
+        self.tick_price_alerts = list
+        self.historical_data_alerts = list
         # req_id for registering
         self.req_id = 0
 
