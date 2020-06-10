@@ -73,21 +73,34 @@ def main():
                                dest="ibroker_host", default="127.0.0.1",
                                help="The host of IB app to use")
     cmdLineParser.add_argument("-ip", "--ibroker_port", action="store", type=int,
-                               dest="port", default=7497, help="The TCP port for IB to use")
+                               dest="ibroker_port", default=7497, help="The TCP port for IB to use")
     cmdLineParser.add_argument("-rh", "--redis_host", action="store", type=str,
-                               dest="ibroker_host", default="127.0.0.1",
+                               dest="redis_host", default="127.0.0.1",
                                help="The host of Redis app to use")
     cmdLineParser.add_argument("-rp", "--redis_port", action="store", type=int,
-                               dest="port", default=6379, help="The TCP port for redis to use")
+                               dest="redis_port", default=6379, help="The TCP port for redis to use")
     args = cmdLineParser.parse_args()
 
     # create a redis connection and queue
     redis_connection = Redis(host=args.redis_host, port=args.redis_port)
     redis_queue = Queue(connection=redis_connection)
 
-    app = IBApp(args.host, args.port, client_id=1, redis_queue=redis_queue)
+    app = IBApp(args.ibroker_host, args.ibroker_port, client_id=1, redis_queue=redis_queue)
 
     time.sleep(CONNECT_SERVER_SLEEP_TIME) #  Sleep interval to allow time for connection to server
+
+    # EUR\USD contract
+    eurusd_contract = Contract()
+    eurusd_contract.symbol = 'EUR'
+    eurusd_contract.secType = 'CASH'
+    eurusd_contract.exchange = 'IDEALPRO'
+    eurusd_contract.currency = 'USD'
+
+    # Request Market Data for EUR\USD
+    app.reqMktData(1, eurusd_contract, '', False, False, [])
+
+    # Request historical candles
+    app.reqHistoricalData(1, eurusd_contract, '', '2 D', '1 hour', 'BID', 0, 2, False, [])
 
     while True:
 
@@ -106,19 +119,6 @@ def main():
                 app.register_historical_data_alert(task)
         # sleep for new task
         time.sleep(REDIS_GET_TASKS_DELAY)
-
-    # # EUR\USD contract
-    # eurusd_contract = Contract()
-    # eurusd_contract.symbol = 'EUR'
-    # eurusd_contract.secType = 'CASH'
-    # eurusd_contract.exchange = 'IDEALPRO'
-    # eurusd_contract.currency = 'USD'
-
-    # # Request Market Data for EUR\USD
-    # app.reqMktData(1, eurusd_contract, '', False, False, [])
-
-    # # Request historical candles
-    # app.reqHistoricalData(1, eurusd_contract, '', '2 D', '1 hour', 'BID', 0, 2, False, [])
 
 
 if __name__ == "__main__":
