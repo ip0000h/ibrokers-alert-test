@@ -51,7 +51,8 @@ class IBApp(EWrapper, EClient):
     def register_historical_data_alert(self, task_data: dict):
         pass
 
-    def create_stock_contract(self, symbol: str, secType='STK', exchange='SMART', currency='USD'):
+    def create_stock_contract(self, symbol: str, secType: str = 'STK',
+                              exchange: str = 'SMART', currency: str = 'USD'):
         """
         Custom method to create contract
         """
@@ -89,18 +90,20 @@ def main():
     time.sleep(CONNECT_SERVER_SLEEP_TIME) #  Sleep interval to allow time for connection to server
 
     while True:
+
         # get a new tasks for tick price
         new_tasks_tick_price = redis_connection.get('new_task_tick_price')
         if new_tasks_tick_price:
             for task in new_tasks_tick_price:
                 task = json.loads(task)
                 app.register_tick_price_alert(task)
+
         # get a new tasks for history data
-        new_tasks_tick_price = redis_connection.get('new_task_historical_data')
-        if new_tasks_tick_price:
-            for task in new_tasks_tick_price:
+        new_tasks_history_data = redis_connection.get('new_task_historical_data')
+        if new_tasks_history_data:
+            for task in new_tasks_history_data:
                 task = json.loads(task)
-                app.register_tick_price_alert(task)
+                app.register_historical_data_alert(task)
         # sleep for new task
         time.sleep(REDIS_GET_TASKS_DELAY)
 
@@ -113,6 +116,9 @@ def main():
 
     # # Request Market Data for EUR\USD
     # app.reqMktData(1, eurusd_contract, '', False, False, [])
+
+    # # Request historical candles
+    # app.reqHistoricalData(1, eurusd_contract, '', '2 D', '1 hour', 'BID', 0, 2, False, [])
 
 
 if __name__ == "__main__":
