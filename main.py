@@ -11,9 +11,10 @@ from ibapi.common import BarData, TickAttrib, TickerId
 from ibapi.contract import Contract
 from ibapi.ticktype import TickType
 from ibapi.wrapper import EWrapper
-
-from rq import Queue
 from redis import Redis
+from rq import Queue
+
+from mail import alert_mail
 
 
 CONNECT_SERVER_SLEEP_TIME = 1
@@ -21,8 +22,8 @@ REDIS_GET_TASKS_DELAY = 0.2
 
 
 class AlertRule(Enum):
-    GREAT = 1
-    LESS = 2
+    HIGHER = 1
+    LOWER = 2
 
 
 class AlertTask(object):
@@ -35,16 +36,10 @@ class AlertTask(object):
         self.price = price
 
     def is_alert_triggered(self, price: float):
-        if self.alert_rule == AlertRule.GREAT:
-            if price > self.price:
-                return True
-            else:
-                return False
+        if self.alert_rule == AlertRule.HIGHER:
+            return bool(price > self.price)
         else:
-            if price < self.price:
-                return True
-            else:
-                return False
+            return bool(price < self.price)
 
 
 class IBApp(EWrapper, EClient):
@@ -63,9 +58,9 @@ class IBApp(EWrapper, EClient):
 
         self.redis_queue = redis_queue
 
-        # alerts list
-        self.tick_price_alerts = list
-        self.historical_data_alerts = list
+        # alerts dicts
+        self.tick_price_alerts = {}
+        self.historical_data_alerts = {}
         # req_id for registering
         self.req_id = 0
 
@@ -73,26 +68,36 @@ class IBApp(EWrapper, EClient):
         self.req_id += 1
         return self.req_id
 
-    def tickPrice(self, reqId: TickerId, tickType: TickType, price: float, attrib: TickAttrib):
-        logging.info('%s tickType:%s Price: %s', reqId, tickType, price)
-        # TODO: here check for price and rules and create an alert task if needed
+    def tickPrice(self, req_id: TickerId, tickType: TickType, price: float, attrib: TickAttrib):
+        logging.info('%s tickType:%s Price: %s', req_id, tickType, price)
+        # alert_task = self.tick_price_alerts[req_id]
+        # if alert_task.is_alert_triggered(price):
+        #     message = f'Price for {req_id} is {price}'
+        #     self.redis_queue.enqueue(alert_mail, message)
 
-    def historicalData(self, reqId: int, bar: BarData):
-        logging.info('Time: %s Close: %s', bar.date, bar.close)
-        # TODO: here check for price and rules and create an alert task if needed
+    def historicalData(self, req_id: int, bar: BarData):
+        logging.info('%s Time: %s Close: %s', req_id, bar.date, bar.close)
+        # alert_task = self.historical_data_alerts[req_id]
+        # if alert_task.is_alert_triggered(bar.close):
+        #     message = f'Price for {req_id} is {bar.close}'
+        #     self.redis_queue.enqueue(alert_mail, message)
+
 
     def register_tick_price_alert(self, task_data: dict):
         contract = self.create_stock_contract(task_data['symbol'])
-        # Request Market Data for contract
-        self.reqMktData(self.next_req_id(), contract, '', False, False, [])
-
+        req_id = self.next_req_id()
+        self.reqMktData(req_id, contract, '', False, False, [])
+        new_alert = AlertTask(req_id, task_data['rule'], task_data['price'])
+        self.tick_price_alerts[req_id] = new_alert
 
     def register_historical_data_alert(self, task_data: dict):
         contract = self.create_stock_contract(task_data['symbol'])
-        # Request Market Data for contract
         # TODO: add other params
-        self.reqHistoricalData(self.next_req_id(),
-                               contract, '', '2 D', '1 hour', 'BID', 0, 2, False, [])
+        req_id = self.next_req_id()
+        self.reqHistoricalData(req_id, contract,
+                               '', '2 D', '1 hour', 'BID', 0, 2, False, [])
+        new_alert = AlertTask(req_id, task_data['rule'], task_data['price'])
+        self.tick_price_alerts[req_id] = new_alert
 
     def create_stock_contract(self, symbol: str, secType: str = 'CASH',
                               exchange: str = 'IDEALPRO', currency: str = 'USD'):
@@ -157,6 +162,9 @@ def main():
                 # sleep for new task
                 time.sleep(REDIS_GET_TASKS_DELAY)
 
+            except KeyboardInterrupt:
+                logging.warning('Closing application')
+                break
             except TypeError:
                 logging.error('Wrong data from redis')
                 continue
